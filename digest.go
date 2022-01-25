@@ -90,7 +90,7 @@ func (da *DigestAuth) purgeLocked(count int) {
 
 // RequireAuth is an http.HandlerFunc which initiates the
 // authentication process (or requires reauthentication).
-func (da *DigestAuth) RequireAuth(w http.ResponseWriter, r *http.Request) {
+func (da *DigestAuth) RequireAuth(w http.ResponseWriter, r *http.Request, stale bool) {
 	da.mutex.RLock()
 	clientsLen := len(da.clients)
 	da.mutex.RUnlock()
@@ -106,9 +106,11 @@ func (da *DigestAuth) RequireAuth(w http.ResponseWriter, r *http.Request) {
 
 	da.mutex.RLock()
 	w.Header().Set(contentType, da.Headers.V().UnauthContentType)
-	w.Header().Set(da.Headers.V().Authenticate,
-		fmt.Sprintf(`Digest realm="%s", nonce="%s", opaque="%s", algorithm=MD5, qop="auth"`,
-			da.Realm, nonce, da.Opaque))
+	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", opaque="%s", algorithm="MD5", qop="auth"`, da.Realm, nonce, da.Opaque)
+	if stale {
+		value += ", stale=true"
+	}
+	w.Header().Set(da.Headers.V().Authenticate, value)
 	w.WriteHeader(da.Headers.V().UnauthCode)
 	w.Write([]byte(da.Headers.V().UnauthResponse))
 	da.mutex.RUnlock()
@@ -130,14 +132,14 @@ func DigestAuthParams(authorization string) map[string]string {
 // data. Returns a pair of username, authinfo, where username is the
 // name of the authenticated user or an empty string and authinfo is
 // the contents for the optional Authentication-Info response header.
-func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *string) {
+func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *string, stale bool) {
 	da.mutex.RLock()
 	defer da.mutex.RUnlock()
 	username = ""
 	authinfo = nil
 	auth := DigestAuthParams(r.Header.Get(da.Headers.V().Authorization))
 	if auth == nil {
-		return "", nil
+		return "", nil, false
 	}
 	// RFC2617 Section 3.2.1 specifies that unset value of algorithm in
 	// WWW-Authenticate Response header should be treated as
@@ -152,7 +154,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 		auth["algorithm"] = "MD5"
 	}
 	if da.Opaque != auth["opaque"] || auth["algorithm"] != "MD5" || auth["qop"] != "auth" {
-		return "", nil
+		return "", nil, false
 	}
 
 	// Check if the requested URI matches auth header
@@ -166,13 +168,13 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 		// TODO: make an option to allow only strict checking.
 		switch u, err := url.Parse(auth["uri"]); {
 		case err != nil:
-			return "", nil
+			return "", nil, false
 		case r.URL == nil:
-			return "", nil
+			return "", nil, false
 		case len(u.Path) > len(r.URL.Path):
-			return "", nil
+			return "", nil, false
 		case !strings.HasPrefix(r.URL.Path, u.Path):
-			return "", nil
+			return "", nil, false
 		}
 	}
 
@@ -184,7 +186,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 	KD := H(strings.Join([]string{HA1, auth["nonce"], auth["nc"], auth["cnonce"], auth["qop"], HA2}, ":"))
 
 	if subtle.ConstantTimeCompare([]byte(KD), []byte(auth["response"])) != 1 {
-		return "", nil
+		return "", nil, false
 	}
 
 	// At this point crypto checks are completed and validated.
@@ -192,15 +194,15 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 
 	nc, err := strconv.ParseUint(auth["nc"], 16, 64)
 	if err != nil {
-		return "", nil
+		return "", nil, false
 	}
 
 	client, ok := da.clients[auth["nonce"]]
 	if !ok {
-		return "", nil
+		return "", nil, true
 	}
 	if client.nc != 0 && client.nc >= nc && !da.IgnoreNonceCount {
-		return "", nil
+		return "", nil, true
 	}
 	client.nc = nc
 	client.lastSeen = time.Now().UnixNano()
@@ -209,7 +211,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 	rspauth := H(strings.Join([]string{HA1, auth["nonce"], auth["nc"], auth["cnonce"], auth["qop"], respHA2}, ":"))
 
 	info := fmt.Sprintf(`qop="auth", rspauth="%s", cnonce="%s", nc="%s"`, rspauth, auth["cnonce"], auth["nc"])
-	return auth["username"], &info
+	return auth["username"], &info, false
 }
 
 // Default values for ClientCacheSize and ClientCacheTolerance for DigestAuth
@@ -226,8 +228,8 @@ const (
 // Deprecated: new code should use NewContext instead.
 func (da *DigestAuth) Wrap(wrapped AuthenticatedHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if username, authinfo := da.CheckAuth(r); username == "" {
-			da.RequireAuth(w, r)
+		if username, authinfo, stale := da.CheckAuth(r); username == "" {
+			da.RequireAuth(w, r, stale)
 		} else {
 			ar := &AuthenticatedRequest{Request: *r, Username: username}
 			if authinfo != nil {
@@ -253,7 +255,7 @@ func (da *DigestAuth) JustCheck(wrapped http.HandlerFunc) http.HandlerFunc {
 
 // NewContext returns a context carrying authentication information for the request.
 func (da *DigestAuth) NewContext(ctx context.Context, r *http.Request) context.Context {
-	username, authinfo := da.CheckAuth(r)
+	username, authinfo, stale := da.CheckAuth(r)
 	da.mutex.Lock()
 	defer da.mutex.Unlock()
 	info := &Info{Username: username, ResponseHeaders: make(http.Header)}
@@ -267,9 +269,12 @@ func (da *DigestAuth) NewContext(ctx context.Context, r *http.Request) context.C
 		}
 		nonce := RandomKey()
 		da.clients[nonce] = &digestClient{nc: 0, lastSeen: time.Now().UnixNano()}
-		info.ResponseHeaders.Set(da.Headers.V().Authenticate,
-			fmt.Sprintf(`Digest realm="%s", nonce="%s", opaque="%s", algorithm=MD5, qop="auth"`,
-				da.Realm, nonce, da.Opaque))
+		value := fmt.Sprintf(`Digest realm="%s", nonce="%s", opaque="%s", algorithm="MD5", qop="auth"`,
+			da.Realm, nonce, da.Opaque)
+		if stale {
+			value += ", stale=true"
+		}
+		info.ResponseHeaders.Set(da.Headers.V().Authenticate, value)
 	}
 	return context.WithValue(ctx, infoKey, info)
 }
