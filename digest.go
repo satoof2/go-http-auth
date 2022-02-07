@@ -139,7 +139,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 	authinfo = nil
 	auth := DigestAuthParams(r.Header.Get(da.Headers.V().Authorization))
 	if auth == nil {
-		return "", nil, true
+		return "", nil, false
 	}
 	// RFC2617 Section 3.2.1 specifies that unset value of algorithm in
 	// WWW-Authenticate Response header should be treated as
@@ -154,7 +154,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 		auth["algorithm"] = "MD5"
 	}
 	if da.Opaque != auth["opaque"] || auth["algorithm"] != "MD5" || auth["qop"] != "auth" {
-		return "", nil, true
+		return "", nil, false
 	}
 
 	// Check if the requested URI matches auth header
