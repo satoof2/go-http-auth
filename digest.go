@@ -168,13 +168,13 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 		// TODO: make an option to allow only strict checking.
 		switch u, err := url.Parse(auth["uri"]); {
 		case err != nil:
-			return "", nil, true
+			return "", nil, false
 		case r.URL == nil:
-			return "", nil, true
+			return "", nil, false
 		case len(u.Path) > len(r.URL.Path):
-			return "", nil, true
+			return "", nil, false
 		case !strings.HasPrefix(r.URL.Path, u.Path):
-			return "", nil, true
+			return "", nil, false
 		}
 	}
 
