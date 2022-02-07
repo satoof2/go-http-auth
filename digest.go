@@ -139,7 +139,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 	authinfo = nil
 	auth := DigestAuthParams(r.Header.Get(da.Headers.V().Authorization))
 	if auth == nil {
-		return "", nil, false
+		return "", nil, true
 	}
 	// RFC2617 Section 3.2.1 specifies that unset value of algorithm in
 	// WWW-Authenticate Response header should be treated as
@@ -154,7 +154,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 		auth["algorithm"] = "MD5"
 	}
 	if da.Opaque != auth["opaque"] || auth["algorithm"] != "MD5" || auth["qop"] != "auth" {
-		return "", nil, false
+		return "", nil, true
 	}
 
 	// Check if the requested URI matches auth header
@@ -168,13 +168,13 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 		// TODO: make an option to allow only strict checking.
 		switch u, err := url.Parse(auth["uri"]); {
 		case err != nil:
-			return "", nil, false
+			return "", nil, true
 		case r.URL == nil:
-			return "", nil, false
+			return "", nil, true
 		case len(u.Path) > len(r.URL.Path):
-			return "", nil, false
+			return "", nil, true
 		case !strings.HasPrefix(r.URL.Path, u.Path):
-			return "", nil, false
+			return "", nil, true
 		}
 	}
 
@@ -186,7 +186,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 	KD := H(strings.Join([]string{HA1, auth["nonce"], auth["nc"], auth["cnonce"], auth["qop"], HA2}, ":"))
 
 	if subtle.ConstantTimeCompare([]byte(KD), []byte(auth["response"])) != 1 {
-		return "", nil, false
+		return "", nil, true
 	}
 
 	// At this point crypto checks are completed and validated.
@@ -194,7 +194,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 
 	nc, err := strconv.ParseUint(auth["nc"], 16, 64)
 	if err != nil {
-		return "", nil, false
+		return "", nil, true
 	}
 
 	client, ok := da.clients[auth["nonce"]]
@@ -211,7 +211,7 @@ func (da *DigestAuth) CheckAuth(r *http.Request) (username string, authinfo *str
 	rspauth := H(strings.Join([]string{HA1, auth["nonce"], auth["nc"], auth["cnonce"], auth["qop"], respHA2}, ":"))
 
 	info := fmt.Sprintf(`qop="auth", rspauth="%s", cnonce="%s", nc="%s"`, rspauth, auth["cnonce"], auth["nc"])
-	return auth["username"], &info, false
+	return auth["username"], &info, true
 }
 
 // Default values for ClientCacheSize and ClientCacheTolerance for DigestAuth
