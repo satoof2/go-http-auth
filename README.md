@@ -5,6 +5,10 @@ This is an implementation of HTTP Basic and HTTP Digest authentication
 in Go language. It is designed as a simple wrapper for
 http.RequestHandler functions.
 
+なんでforkしたのか
+--------
+このライブラリを使い認証を行うサーバーが自動でスケールアウトするような状況下の場合、認証がうまくいかないことがあったので対応しないといけなかった。
+
 Features
 --------
  
