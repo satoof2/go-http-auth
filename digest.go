@@ -282,7 +282,9 @@ func (da *DigestAuth) NewContext(ctx context.Context, r *http.Request) context.C
 // NewDigestAuthenticator generates a new DigestAuth object
 func NewDigestAuthenticator(realm string, secrets SecretProvider) *DigestAuth {
 	da := &DigestAuth{
-		Opaque:               RandomKey(),
+		// 認証するサーバーの台数がオートスケールすることを考えると、
+		// Opaqueがどのサーバーでも同一で、クライアントのリクエストがどのサーバーに向かっても認証が通るようにしたい
+		Opaque:               "myopaque",
 		Realm:                realm,
 		Secrets:              secrets,
 		PlainTextSecrets:     false,
